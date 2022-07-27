@@ -1,0 +1,544 @@
+---
+title: "Final_Project"
+author: "Mengjia Zeng"
+date: '2022-04-22'
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+setwd("C:/Users/mengj/Documents/STAT/STAT530/Possible Finals")
+library(edgeR)
+library(stringr)
+library(tibble)
+library(tidyverse)
+library(ggfortify)
+library(DESeq2)
+library(pheatmap)
+library(GiNA)
+library(gplots)
+library(statmod)
+library(GO.db)
+library(org.Dm.eg.db)
+```
+
+
+```{r}
+gene = read.delim("GSE137498_counts.matrix.txt.gz", sep = "")
+```
+
+# Add Annotation for DEG list
+
+```{r}
+condition = c(rep("GroupLong", 3), rep("IsoLong", 3), rep("IsoShort", 3))
+newgene = gene[,7:15] %>% dplyr::select(order(colnames(gene[,7:15]),decreasing = FALSE))
+rownames(newgene) = gene[,1]
+colnames(newgene) = c("STAR.Group_Long1", "STAR.Group_Long2", "STAR.Group_Long3", "STAR.Iso_Long1", "STAR.Iso_Long2", "STAR.Iso_Long3", "STAR.Iso_Short1", "STAR.Iso_Short2", "STAR.Iso_Short3")
+y = DGEList(counts= newgene, group = condition)
+```
+
+```{r}
+dim(y)
+```
+
+```{r}
+mycpm = cpm(y)
+keep = rowSums(mycpm > 1) >= 3
+y = y[keep, keep.lib.sizes = FALSE]
+```
+
+```{r}
+dim(y)
+```
+```{r}
+y = calcNormFactors(y)
+```
+
+# Try Hierarchical Clustering 
+
+```{r}
+par(mfrow = c(1,1), cex.axis=0.5, cex.lab = 0.75)
+logcpm = cpm(y$counts,log = TRUE)
+boxplot(logcpm, xlab="", ylab="Log2 counts per million",las=2, outline=FALSE)
+abline(h = median(logcpm), col="blue")
+title("Boxplots of logCPMs (unnormalised)")
+```
+
+```{r}
+par(mfrow=c(1,1))
+plotMDS(y, cex = 0.4)
+```
+
+
+```{r}
+my_colData = as.data.frame(condition)
+rownames(my_colData) = colnames(y)
+my_colData
+```
+
+```{r}
+plot(hclust(dist(t(y[[1]]))), labels = colnames(y[[1]]))
+```
+
+```{r}
+library(factoextra)
+km = kmeans(t(y[[1]]), centers = 3)
+fviz_cluster(km, data = t(y[[1]]))
+```
+
+```{r}
+plot(hclust(dist(t(log(y[[1]] + 1)))), labels = colnames(y[[1]]))
+```
+
+
+```{r}
+km = kmeans(t(log(y[[1]] + 1)), centers = 3)
+fviz_cluster(km, data = t(log(y[[1]] + 1)))
+```
+
+
+
+```{r}
+dds = DESeqDataSetFromMatrix(countData = y,
+                              colData = my_colData,
+                              design = ~condition)
+```
+
+```{r}
+dds = DESeq(dds)
+```
+
+```{r}
+normlzd_dds = counts(dds, normalized=T)
+
+head(normlzd_dds)
+```
+
+```{r}
+plot(hclust(dist(t(normlzd_dds))), labels=colData(dds)$protocol)
+```
+
+```{r}
+library(factoextra)
+km = kmeans(t(normlzd_dds), centers = 3)
+fviz_cluster(km, data = t(normlzd_dds))
+```
+
+
+
+# Using PCA 
+
+```{r}
+pcDat1 = prcomp(t(y[[1]]))
+summary(pcDat1)
+```
+
+```{r}
+clust = kmeans(pcDat1$x[,1:2], centers=3)$cluster
+clust
+autoplot(pcDat1, label = TRUE, label.size = 1.5)
+```
+
+```{r}
+pcDat2 = prcomp(t(normlzd_dds))
+```
+
+```{r}
+clust2 = kmeans(pcDat2$x[,1:2], centers=3)$cluster
+clust2
+autoplot(pcDat2, label = TRUE, label.size = 1.5)
+```
+
+```{r}
+pcDat3 = prcomp(t(log(y[[1]] + 1)))
+```
+
+```{r}
+clust3 = kmeans(pcDat3$x[,1:2], centers=3)$cluster
+clust3
+autoplot(pcDat3, label = TRUE, label.size = 1.5)
+```
+
+
+```{r}
+vsd = vst(dds, blind = TRUE)
+```
+
+```{r}
+vsd_mat = assay(vsd)
+
+# compute pairwise correlation values
+vsd_cor = cor(vsd_mat)
+
+pheatmap(vsd_cor)
+```
+
+
+```{r}
+plot_PCA = function (vsd.obj) {
+  pcaData <- plotPCA(vsd.obj,  intgroup = c("condition"), returnData = T)
+  percentVar <- round(100 * attr(pcaData, "percentVar"))
+  ggplot(pcaData, aes(PC1, PC2, color=condition)) +
+    geom_point(size=3) +
+    labs(x = paste0("PC1: ",percentVar[1],"% variance"),
+         y = paste0("PC2: ",percentVar[2],"% variance"),
+         title = "PCA Plot colored by condition") +
+    ggrepel::geom_text_repel(aes(label = name), color = "black")
+}
+plot_PCA(vsd)
+```
+
+```{r}
+res = results(dds, contrast = c("condition", "GroupLong", "IsoShort"), alpha = 0.001)
+summary(res)
+```
+
+```{r}
+resSort = res[order(res$pvalue),]
+
+head(resSort)
+```
+
+```{r}
+plotMA(res, ylim=c(-5,5) )
+```
+```{r}
+resBigFC <- results(dds, lfcThreshold=1.2, altHypothesis="greaterAbs")
+plotMA(resBigFC, ylim=c(-5,5))
+abline(h=c(-1,1),lwd=5)
+```
+
+
+
+```{r}
+newres = res[which(res$padj < 0.001),]
+```
+
+```{r}
+up1 = rownames(newres[which(newres$log2FoldChange > 0),])
+```
+
+```{r}
+down1 = rownames(newres[which(newres$log2FoldChange < 0),])
+```
+
+
+## IsoLong - IsoShort
+
+```{r}
+res2 = results(dds, contrast = c("condition", "IsoLong", "IsoShort"), alpha = 0.001)
+summary(res2)
+```
+
+```{r}
+plotMA(res2, ylim=c(-5,5) )
+```
+
+```{r}
+newres2 = res2[which(res2$padj < 0.001),]
+```
+
+```{r}
+up2 = rownames(newres2[which(newres2$log2FoldChange > 0),])
+```
+
+```{r}
+down2 = rownames(newres2[which(newres2$log2FoldChange < 0),])
+```
+
+# RNA Analysis (QL F test - Between Two Conditions)
+
+```{r}
+#multiVals = function(x) paste(x,collapse=";")
+#Symbol = mapIds(org.Dm.eg.db, keys = rownames(y), keytype = "FLYBASE", column = "SYMBOL", multiVals = multiVals)
+#y$genes = data.frame(Symbol = Symbol, stringsAsFactors = FALSE)
+
+#head(y$genes)
+#HasSymbol = y$genes$Symbol != "NA"
+```
+
+```{r}
+#y = y[HasSymbol, , keep.lib.sizes=FALSE]
+#dim(y)
+```
+
+```{r}
+#geneID = mapIds(org.Dm.eg.db, keys = rownames(y), keytype = "FLYBASE", column = "ENTREZID", multiVals = multiVals)
+#rownames(y) = geneID
+```
+
+```{r}
+newgene_main = y
+dim(newgene_main)
+```
+
+```{r}
+design = model.matrix(~ 0 + condition)
+design
+```
+
+```{r}
+y = estimateDisp(y = newgene_main, design = design, robust=TRUE)
+fit = glmQLFit(y, design, robust=TRUE)
+head(fit$coefficients)
+```
+
+
+```{r}
+con2 = makeContrasts(conditionGroupLong - conditionIsoShort, levels = design)
+qlf2 = glmQLFTest(fit, contrast = con2)
+```
+
+```{r}
+summary(decideTests(qlf2))
+```
+
+```{r}
+plotMD(qlf2)
+```
+
+```{r}
+tr2 = glmTreat(fit, contrast = con2, lfc = log2(1.2))
+summary(decideTests(tr2))
+```
+
+```{r}
+plotMD(tr2)
+```
+
+
+
+```{r}
+con3 = makeContrasts(conditionIsoLong - conditionIsoShort, levels = design)
+qlf3 = glmQLFTest(fit, contrast = con3)
+```
+
+```{r}
+summary(decideTests(qlf3))
+```
+
+```{r}
+plotMD(qlf3)
+```
+
+```{r}
+tr3 = glmTreat(fit, contrast = con3, lfc = log2(1.2))
+summary(decideTests(tr3))
+```
+
+```{r}
+plotMD(tr3)
+```
+
+
+
+# RNA Analysis (ANOVA Test - Among Three Conditions)
+
+```{r}
+totalcon = makeContrasts(
+  GI_Long = conditionGroupLong - conditionIsoLong,
+  GI_Short = conditionGroupLong - conditionIsoShort,
+  Iso_time = conditionIsoLong - conditionIsoShort,
+  levels=design)
+```
+
+```{r}
+anov = glmQLFTest(fit, contrast = totalcon)
+summary(decideTests(anov))
+```
+
+```{r}
+result_anova = anov$table
+result_anova_sort = result_anova[order(result_anova$PValue),]
+```
+
+```{r}
+topgene = rownames(result_anova_sort[1:10,])
+res_signew = data.frame(newgene_main[[1]][which(rownames(newgene_main[[1]]) %in% topgene), ])
+heat_colors = brewer.pal(6, "YlOrRd")
+
+
+pheatmap(res_signew,
+        color = heat_colors,
+        cluster_rows = T,
+        show_rownames = T,
+        scale = "row"
+        )
+```
+
+```{r}
+new = anov[which(decideTests(anov) == 1),]
+result_new = new$table
+result_new_sort = result_new[order(result_new$PValue),]     
+
+topgenenew = rownames(result_new_sort)
+res_signew2 = data.frame(newgene_main[[1]][which(rownames(newgene_main[[1]]) %in% topgenenew), ])
+heat_colors = brewer.pal(6, "YlOrRd")
+
+
+allplot = pheatmap(res_signew2,
+         color = heat_colors,
+         cluster_rows = T,
+         show_rownames =F,
+         scale = "row", 
+         cutree_rows = 5,
+         main = "pheatmap row cut")
+allplot
+```
+
+```{r}
+newcluster = cbind(res_signew2, cluster = cutree(allplot$tree_row, k = 5))
+```
+
+```{r}
+table(newcluster$cluster)
+```
+
+```{r}
+set.seed(100)
+pcall = prcomp(t(res_signew2))
+clustall = kmeans(pcall$x[,1:2], center = 3)
+clustall
+```
+
+```{r}
+newcondition = c(rep("GroupLong", 3), rep("IsoLong", 3), rep("IsoShort", 3))
+ggplot(pcall$x[,1:2], aes(PC1, PC2, color= newcondition)) + geom_point(size=3)
+```
+
+```{r}
+pcall$rotation[,1][which(pcall$rotation[,1] > 0.01)]
+```
+
+
+```{r}
+set.seed(100)
+pcnew = prcomp(t(res_signew))
+```
+
+```{r}
+clustnew = kmeans(pcnew$x[,1:2], center = 3)
+clustnew
+```
+
+```{r}
+ggplot(pcnew$x[,1:2], aes(PC1, PC2, color= condition)) + geom_point(size=3)
+```
+
+```{r}
+pcnew$rotation[,1:2]
+```
+
+```{r}
+rownames(res_signew) = names(rownames(newgene_main))[which(rownames(newgene_main) %in% rownames(res_signew))]
+```
+
+
+
+```{r}
+library(MASS)
+dig.lda = lda(t(res_signew[c(3,5),]), condition)
+FDA.dir = dig.lda$scaling
+F = t(res_signew[c(3,5),])%*%FDA.dir
+plot(F[,1],F[,2], type="n", xlab="", ylab="")
+text(F[,1], F[,2], condition, col = c(rep("red",3), rep("green",3), rep("blue",3)))
+```
+```{r}
+dig.lda
+```
+
+
+```{r}
+up_r1 = rownames(newgene_main)[which(decideTests(tr2) == 1)]
+```
+
+```{r}
+down_r1 = rownames(newgene_main)[which(decideTests(tr2) == -1)]
+```
+
+```{r}
+up_r2 = rownames(newgene_main)[which(decideTests(tr3) == 1)]
+```
+
+```{r}
+down_r2 = rownames(newgene_main)[which(decideTests(tr3) == -1)]
+```
+
+```{r}
+length(up_r1)
+length(down_r1)
+length(up_r2)
+length(down_r2)
+```
+
+
+```{r}
+new1 = intersect(up_r1, up1)
+new2 = intersect(down_r1, down1)
+new3 = intersect(up_r2, up2)
+new4 = intersect(down_r2, down2)
+```
+
+```{r}
+length(new1)
+length(new2)
+length(new3)
+length(new4)
+```
+
+```{r}
+cat(new1, sep = "\n")
+```
+
+```{r}
+cat(new2, sep = "\n")
+```
+
+```{r}
+cat(new3, sep = "\n")
+```
+
+```{r}
+cat(new4, sep = "\n")
+```
+
+
+```{r}
+cat1 = rownames(newcluster[which(newcluster$cluster == 3),])
+```
+
+```{r}
+cat(cat1, sep = "\n")
+```
+```{r}
+cat2 = rownames(newcluster[which(newcluster$cluster == 5),])
+```
+
+```{r}
+cat(cat2, sep = "\n")
+```
+
+```{r}
+cat3 = rownames(newcluster[which(newcluster$cluster == 1),])
+```
+
+```{r}
+cat(cat3, sep = "\n")
+```
+
+```{r}
+cat4 = rownames(newcluster[which(newcluster$cluster == 4),])
+```
+
+```{r}
+cat(cat4, sep = "\n")
+```
+
+```{r}
+cat5 = rownames(newcluster[which(newcluster$cluster == 2),])
+```
+
+```{r}
+cat(cat5, sep = "\n")
+```
